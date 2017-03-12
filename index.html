@@ -1,0 +1,198 @@
+<head>
+<style>
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px;
+}
+
+tr:nth-child(even){background-color: #f2f2f2}
+</style>
+
+<script>
+  const DB_STORE_NAME = "audio_files";
+  const DB_NAME = "AudioFilesDatabase";
+  function deleteDatabase() {
+    window.indexedDB.deleteDatabase(DB_NAME);
+  }
+</script>
+
+</head>
+
+<div display="inline-block">
+  <label for="video_player" id="video_player_label"></label>
+  <video id="video_player" controls="" name="media"></video>
+</div>
+<input display="inline-block" type="file" id="files" name="files[]" multiple />
+<button onclick="deleteDatabase()">Delete Database</button>
+<div id="loading_label" style="display: inline-block; margin-left: 2em"></div>
+
+
+<div style="overflow-x:auto;">
+<table id="audio_table"><tbody>
+  <tr><th>Name</th><th>Duration<th>
+  </tr>
+</tbody></table >
+</div>
+
+<script>
+  var audio_files = [];
+  var db = null;
+  var video_player = document.getElementById('video_player');   
+  var play_index = null;
+
+  var request = indexedDB.open(DB_NAME);
+  request.onerror = function(event) {
+    console.log("Create db failed");
+  };
+  request.onsuccess = function(event) {
+    db = event.target.result;
+    loadFilesFromDB();
+  };
+  request.onupgradeneeded = function(event) {
+    var db = event.target.result;
+    db.createObjectStore(DB_STORE_NAME, {keyPath: "name"});
+  };
+
+  function getObjectStore(mode) {
+    var tx = db.transaction(DB_STORE_NAME, mode);
+    return tx.objectStore(DB_STORE_NAME);
+  }
+
+  function loadFilesFromDB() {
+    var i = 0;
+    var store = getObjectStore('readonly');
+
+    var req = store.openCursor();
+    req.onsuccess = function(evt) {
+      var cursor = evt.target.result;
+      if (cursor) {
+        var req = store.get(cursor.key);
+        req.onsuccess = function(evt) {
+          var value = evt.target.result;
+
+          var tr = document.createElement("tr");
+          var name_cell = tr.insertCell();
+          name_cell.innerHTML = value.name;
+
+          var duration_cell = tr.insertCell();
+          duration_cell.innerHTML = value.dur;
+
+          tr.addEventListener("dblclick", handleAudioDoubleClick, false);
+          audio_files.push([value.name, tr, value.f]);
+
+          cursor.continue();
+          i++;
+        }
+      } else {
+        putAudioFilesInList(audio_files);
+        playAudioFileByIndex(0, false);
+      }
+    }
+  }
+
+  function playAudioFileByIndex(idx, play) {
+    if (audio_files.length === 0) {
+      return;
+    }
+
+    idx = Math.max(0, Math.min(audio_files.length - 1, idx));
+    var name = audio_files[idx][0];
+    var f = audio_files[idx][2];
+    var objectURL = URL.createObjectURL(f);
+
+    var video_player = document.getElementById("video_player");
+    var video_label = document.getElementById("video_player_label");
+    video_label.innerHTML = name;
+    video_player.pause();
+    play_index = idx;
+    video_player.src = objectURL;
+    video_player.load();
+
+    if (play) {
+      video_player.play();
+    }
+  }
+
+  function handleAudioDoubleClick(evt) {
+    var idx = evt.target.parentNode.rowIndex - 1;
+    playAudioFileByIndex(idx, true);
+  }
+
+  function putAudioFilesInList(audio_files) {
+    var table = document.getElementById('audio_table');
+    for (var i = 0; i < audio_files.length; i++) {
+      table.appendChild(audio_files[i][1]);
+    }
+  }
+
+  function durationString(duration) {
+    var seconds = duration % 60.0;
+    duration = (duration - seconds) / 60.0;
+    var time = seconds.toFixed(2);
+    if (duration === 0.0) {
+      return time;
+    }
+
+    var minutes = duration % 60.0;
+    duration = (duration - minutes) / 60.0;
+    time = String(minutes) + ":" + time;
+    if (duration === 0.0) {
+      return time;
+    }
+
+    var hours = duration % 60.0;
+    time = String(hours) + ":" + time;
+    return time;
+  }
+
+  function addTrackedAudioFiles(evt) {
+    var files = evt.target.files;
+   
+    // Create an invsible audio player to get metadata.
+    var load_promises = [];
+    document.getElementById('loading_label').innerText = "Loading.";
+    for (var i = 0; i < files.length; i++) {
+      load_promises.push(new Promise(function(resolve, reject) {
+        var f = files[i];
+        var test_player = document.createElement("audio");
+        var objectURL = URL.createObjectURL(f);
+        test_player.src = objectURL;
+        test_player.oncanplay = function (e) {
+          var object_store = db.transaction(["audio_files"], "readwrite").objectStore("audio_files");
+          var duration_string = durationString(e.currentTarget.duration);
+          var value = { name: escape(f.name), f: f, dur: duration_string };
+          object_store.add(value);
+          console.log("Wrote: " + value.name);
+          window.URL.revokeObjectURL(objectURL);
+          resolve();
+        };
+        test_player.load()
+      }));
+    }
+    Promise.all(load_promises).then(function() {
+      loadFilesFromDB(); 
+      document.getElementById('loading_label').innerText = "Done.";
+    });
+  }
+
+  // Load audio files from IndexedDB.
+  document.getElementById('files').addEventListener('change', addTrackedAudioFiles, false);
+  document.onkeydown = function(e) {
+    if (e.keyCode === 32){
+      video_player.paused ? video_player.play() : video_player.pause();
+    } else if (e.keyCode === 37) {
+      // Left Arrow.
+      playAudioFileByIndex(play_index - 1, true);
+    } else if (e.keyCode === 39) {
+      // Right Arrow.
+      playAudioFileByIndex(play_index + 1, true);
+    }
+
+    return false;
+  };
+</script>
